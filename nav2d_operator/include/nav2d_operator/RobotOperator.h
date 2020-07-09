@@ -14,6 +14,7 @@
 #include <nav2d_operator/cmd.h>
 #include <tf/transform_listener.h>
 #include <tf2_ros/transform_listener.h>
+#include <sensor_msgs/Joy.h>
 
 #include <string>
 
@@ -60,6 +61,13 @@ private:
 	 * @return Nmber of free cells
 	 */
 	int calculateFreeSpace(sensor_msgs::PointCloud* cloud);
+
+    /**
+     * @brief Calculates the distance the robot can rotate
+     * @param cloud PointCloud defining a trajectory
+     * @return Likelihood to hit something
+     */
+    int calculateRotationSpace(sensor_msgs::PointCloud* cloud);
 
 	/**
 	 * @brief Calculate the action value of a given command
@@ -110,6 +118,7 @@ private:
 	ros::Publisher mTrajectoryPublisher;
 	ros::Publisher mPlanPublisher;
 	ros::Publisher mCostPublisher;
+    ros::Publisher mjoyPublisher;
 	
 	double mDesiredVelocity;
 	double mDesiredDirection;
@@ -120,6 +129,9 @@ private:
 	sensor_msgs::PointCloud* mTrajTable[(LUT_RESOLUTION * 4) + 2];
 	
 	double mMaxVelocity;
+    double mMaxTurn;
+    double mRobW;
+    double mRobL;
 	
 	bool mPublishRoute;
 	double mMaxFreeSpace;

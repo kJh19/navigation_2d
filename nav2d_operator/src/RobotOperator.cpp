@@ -17,6 +17,7 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 	robotNode.param("odometry_frame", mOdometryFrame, std::string("odometry_base"));
 	mCommandSubscriber = robotNode.subscribe(COMMAND_TOPIC, 1, &RobotOperator::receiveCommand, this);
 	mControlPublisher = robotNode.advertise<geometry_msgs::Twist>(CONTROL_TOPIC, 1);
+    mjoyPublisher = robotNode.advertise<sensor_msgs::Joy>("/whill/controller/joy", 1);
 	mCostPublisher = robotNode.advertise<geometry_msgs::Vector3>("costs", 1);
 	
 	// Get parameters from the parameter server
@@ -35,6 +36,9 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 	operatorNode.param("continue_weight", mContinueWeight, 1);
 	operatorNode.param("escape_weight", mEscapeWeight, 1);
 	operatorNode.param("max_velocity", mMaxVelocity, 1.0);
+    operatorNode.param("max_angular_velocity", mMaxTurn, 1.0);
+    operatorNode.param("robot_width", mRobW, 1.0);
+    operatorNode.param("robot_length", mRobL, 1.0);
 
 	// Apply tf_prefix to all used frame-id's
 	mRobotFrame = mTfListener.resolve(mRobotFrame);
@@ -193,7 +197,7 @@ void RobotOperator::receiveCommand(const nav2d_operator::cmd::ConstPtr& msg)
 		return;
 	}
 	mDesiredDirection = msg->Turn;
-	mDesiredVelocity = msg->Velocity * mMaxVelocity;
+	mDesiredVelocity = msg->Velocity;
 	mDriveMode = msg->Mode;
 }
 
@@ -243,20 +247,27 @@ void RobotOperator::executeCommand()
 	// Determine maximum linear velocity
 	int freeCells = calculateFreeSpace(&transformedCloud);
 	double freeSpace = mRasterSize * freeCells;
+	if (mCurrentVelocity>0){
+	    freeSpace -= (mRobL-mRobW)/2;
+	}
+    int danger = 1-calculateRotationSpace(&transformedCloud)/(255);
+    double safeVelocity = (freeSpace / mMaxFreeSpace)*(danger); // m/s
 
-	double safeVelocity = (freeSpace / mMaxFreeSpace) + 0.05;
+    if(safeVelocity < 0)
+        safeVelocity = 0.05;
+
 	if(freeCells == transformedCloud.points.size() && safeVelocity < 0.5)
 		safeVelocity = 0.5;
 		
 	if(freeSpace < 0.3 && freeCells < transformedCloud.points.size())
-		safeVelocity = 0;
+		safeVelocity = 0.0;
 
 	if(safeVelocity > mMaxVelocity)
 		safeVelocity = mMaxVelocity;
 
 	// Check whether the robot is stuck
 	if(mRecoverySteps > 0) mRecoverySteps--;
-	if(safeVelocity < 0.1)
+	if(safeVelocity < 0.05)
 	{
 		if(mDriveMode == 0)
 		{
@@ -264,7 +275,7 @@ void RobotOperator::executeCommand()
 			ROS_WARN_THROTTLE(1, "Robot is stuck! Trying to recover...");
 		}else
 		{
-			mCurrentVelocity = 0;
+			//mCurrentVelocity = 0.05;
 			ROS_WARN_THROTTLE(1, "Robot cannot move further in this direction!");
 		}
 	}
@@ -320,6 +331,8 @@ void RobotOperator::executeCommand()
 	
 	// Publish result via Twist-Message
 	geometry_msgs::Twist controlMsg;
+    sensor_msgs::Joy joyMsg;
+
 	double velocity = mCurrentVelocity;
 	if(mCurrentDirection == 0)
 	{
@@ -334,10 +347,6 @@ void RobotOperator::executeCommand()
 		}
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = 0;
-	}else if(mCurrentDirection == -1 || mCurrentDirection == 1)
-	{
-		controlMsg.linear.x = 0;
-		controlMsg.angular.z = -1.0 * mCurrentDirection * velocity;
 	}else
 	{
 		double x = sin(mCurrentDirection * PI);
@@ -357,7 +366,15 @@ void RobotOperator::executeCommand()
 		
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = -1.0 / r * controlMsg.linear.x;
+		if (controlMsg.angular.z > mMaxTurn) {
+            controlMsg.angular.z = mMaxTurn;
+		} else if (controlMsg.angular.z < -mMaxTurn) {
+            controlMsg.angular.z = -mMaxTurn;
+        }
 	}
+	ROS_WARN("%lf, %lf", controlMsg.linear.x, controlMsg.angular.z);
+	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
+    mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
 }
 
@@ -383,6 +400,17 @@ int RobotOperator::calculateFreeSpace(sensor_msgs::PointCloud* cloud)
 		}
 	}
 	return freeSpace;
+}
+
+int RobotOperator::calculateRotationSpace(sensor_msgs::PointCloud* cloud)
+{
+    unsigned int mx, my;
+    if(mCostmap->worldToMap(cloud->points[0].x, cloud->points[0].y, mx, my))
+    {
+        return mCostmap->getCost(mx,my);
+    }
+
+    return 1;
 }
 
 double RobotOperator::evaluateAction(double direction, double velocity, bool debug)
