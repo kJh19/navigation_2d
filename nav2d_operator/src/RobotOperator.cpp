@@ -13,7 +13,7 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 	
 	// Publish / subscribe to ROS topics
 	ros::NodeHandle robotNode;
-	robotNode.param("robot_frame", mRobotFrame, std::string("robot"));
+	robotNode.param("laser_frame", mRobotFrame, std::string("laser"));
 	robotNode.param("odometry_frame", mOdometryFrame, std::string("odometry_base"));
 	mCommandSubscriber = robotNode.subscribe(COMMAND_TOPIC, 1, &RobotOperator::receiveCommand, this);
 	mControlPublisher = robotNode.advertise<geometry_msgs::Twist>(CONTROL_TOPIC, 1);
@@ -41,7 +41,7 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
     operatorNode.param("robot_length", mRobL, 1.0);
 
 	// Apply tf_prefix to all used frame-id's
-	mRobotFrame = mTfListener.resolve(mRobotFrame);
+	mRobotFrame = mTfListener.resolve("base_laser_link");
 	mOdometryFrame = mTfListener.resolve(mOdometryFrame);
 
 	// Initialize the lookup table for the driving directions
@@ -78,50 +78,68 @@ void RobotOperator::initTrajTable()
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
 		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
-		std::vector<geometry_msgs::Point32> points;
+		std::vector<geometry_msgs::Point32> fpoints;
+        std::vector<geometry_msgs::Point32> bpoints;
 		double alpha = 0;
-		while(alpha < PI)
+		double beta = 0;
+		while(alpha <= PI)
 		{
-			double x = tr * sin(alpha);
-			double y = tr * (1.0 - cos(alpha));
+			double tx = (tr * sin(alpha));
+			double ty = (tr * (1 - cos(alpha)));
+            double x = tx*cos(-tw/2)-ty*sin(-tw/2);
+            double y = tx*sin(-tw/2)+ty*cos((-tw/2));
 			geometry_msgs::Point32 p;
 			p.x = x;
 			p.y = y;
 			p.z = 0;
-			points.push_back(p);
+			fpoints.push_back(p);
 			alpha += mRasterSize / tr;
 		}
+        while(beta <= PI)
+        {
+            double tx = (tr * sin(beta));
+            double ty = (tr * (1 - cos(beta)));
+            double x = tx*cos(tw/2)-ty*sin(tw/2);
+            double y = tx*sin(tw/2)+ty*cos((tw/2));
+            geometry_msgs::Point32 p;
+            p.x = x;
+            p.y = y;
+            p.z = 0;
+            bpoints.push_back(p);
+            beta += mRasterSize / tr;
+        }
+
 		// Add the PointCloud to the LUT
 		// Circle in forward-left direction
 		sensor_msgs::PointCloud* flcloud = new sensor_msgs::PointCloud();
 		flcloud->header.stamp = ros::Time(0);
 		flcloud->header.frame_id = mRobotFrame;
-		flcloud->points.resize(points.size());
+		flcloud->points.resize(fpoints.size());
 		
 		// Circle in forward-right direction
 		sensor_msgs::PointCloud* frcloud = new sensor_msgs::PointCloud();
 		frcloud->header.stamp = ros::Time(0);
 		frcloud->header.frame_id = mRobotFrame;
-		frcloud->points.resize(points.size());
+		frcloud->points.resize(fpoints.size());
 		
 		// Circle in backward-left direction
 		sensor_msgs::PointCloud* blcloud = new sensor_msgs::PointCloud();
 		blcloud->header.stamp = ros::Time(0);
 		blcloud->header.frame_id = mRobotFrame;
-		blcloud->points.resize(points.size());
+		blcloud->points.resize(bpoints.size());
 		
 		// Circle in backward-right direction
 		sensor_msgs::PointCloud* brcloud = new sensor_msgs::PointCloud();
 		brcloud->header.stamp = ros::Time(0);
 		brcloud->header.frame_id = mRobotFrame;
-		brcloud->points.resize(points.size());
+		brcloud->points.resize(bpoints.size());
 		
-		for(unsigned int j = 0; j < points.size(); j++)
+		for(unsigned int j = 0; j < fpoints.size(); j++)
 		{
-			flcloud->points[j] = points[j];
-			frcloud->points[j] = points[j];
-			blcloud->points[j] = points[j];
-			brcloud->points[j] = points[j];
+			flcloud->points[j] = fpoints[j];
+			frcloud->points[j] = fpoints[j];
+			blcloud->points[j] = bpoints[j];
+			brcloud->points[j] = bpoints[j];
 			
 			frcloud->points[j].y *= -1;
 			blcloud->points[j].x *= -1;
@@ -372,7 +390,7 @@ void RobotOperator::executeCommand()
             controlMsg.angular.z = -mMaxTurn;
         }
 	}
-	ROS_WARN("%lf, %lf", controlMsg.linear.x, controlMsg.angular.z);
+	ROS_WARN("%lf, %lf", mCurrentDirection, mCurrentVelocity);
 	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
     mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
