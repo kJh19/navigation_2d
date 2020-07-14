@@ -384,11 +384,11 @@ void RobotOperator::executeCommand()
 		
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = -1.0 / r * controlMsg.linear.x;
-		if (controlMsg.angular.z > mMaxTurn) {
-            controlMsg.angular.z = mMaxTurn;
-		} else if (controlMsg.angular.z < -mMaxTurn) {
-            controlMsg.angular.z = -mMaxTurn;
-        }
+		//if (controlMsg.angular.z > mMaxTurn) {
+        //    controlMsg.angular.z = mMaxTurn;
+		//} else if (controlMsg.angular.z < -mMaxTurn) {
+        //    controlMsg.angular.z = -mMaxTurn;
+        //}
 	}
 	ROS_WARN("%lf, %lf", mCurrentDirection, mCurrentVelocity);
 	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
