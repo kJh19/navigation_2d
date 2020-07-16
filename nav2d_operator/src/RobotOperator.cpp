@@ -77,7 +77,7 @@ void RobotOperator::initTrajTable()
 		double tw = -PI * i / LUT_RESOLUTION;
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
-		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
+		double tr = ((tx*tx)+(ty*ty))/(ty+ty)+mRobW/2;
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
 		double alpha = 0;
@@ -153,6 +153,7 @@ void RobotOperator::initTrajTable()
 	}
 	
 	// Add First and Last LUT-element
+
 	geometry_msgs::Point32 p;
 	p.x = 0;
 	p.y = 0;
@@ -191,7 +192,7 @@ void RobotOperator::initTrajTable()
 	mTrajTable[LUT_RESOLUTION*2] = turn;
 	mTrajTable[LUT_RESOLUTION*2 + 1] = turn;
 	mTrajTable[LUT_RESOLUTION*4 + 1] = turn;
-	
+
 	for(int i = 0; i < (LUT_RESOLUTION * 4) + 2; i++)
 	{
 		if(!mTrajTable[i])
@@ -384,11 +385,11 @@ void RobotOperator::executeCommand()
 		
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = -1.0 / r * controlMsg.linear.x;
-		//if (controlMsg.angular.z > mMaxTurn) {
-        //    controlMsg.angular.z = mMaxTurn;
-		//} else if (controlMsg.angular.z < -mMaxTurn) {
-        //    controlMsg.angular.z = -mMaxTurn;
-        //}
+		if (controlMsg.angular.z > mMaxTurn) {
+            controlMsg.angular.z = mMaxTurn;
+		} else if (controlMsg.angular.z < -mMaxTurn) {
+            controlMsg.angular.z = -mMaxTurn;
+        }
 	}
 	ROS_WARN("%lf, %lf", mCurrentDirection, mCurrentVelocity);
 	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
