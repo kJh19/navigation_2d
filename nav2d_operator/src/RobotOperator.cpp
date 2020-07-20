@@ -77,36 +77,36 @@ void RobotOperator::initTrajTable()
 		double tw = -PI * i / LUT_RESOLUTION;
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
-		double tr = ((tx*tx)+(ty*ty))/(ty+ty)+mRobW/2;
+		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
 		double alpha = 0;
-		double beta = 0;
 		while(alpha <= PI)
 		{
-			double tx = (tr * sin(alpha));
-			double ty = (tr * (1 - cos(alpha)));
-            double x = tx*cos(-tw/2)-ty*sin(-tw/2);
-            double y = tx*sin(-tw/2)+ty*cos((-tw/2));
+			double x = tr * sin(alpha);
+			double y = tr * (1 - cos(alpha));
+            double px = (mRobW/2) * -(1-cos(alpha));
+            double py = (mRobW/2) * (sin(alpha));
 			geometry_msgs::Point32 p;
-			p.x = x;
-			p.y = y;
+			p.x = x+px;
+			p.y = y+py;
 			p.z = 0;
 			fpoints.push_back(p);
 			alpha += mRasterSize / tr;
 		}
-        while(beta <= PI)
+        alpha = 0;
+        while(alpha <= PI)
         {
-            double tx = (tr * sin(beta));
-            double ty = (tr * (1 - cos(beta)));
-            double x = tx*cos(tw/2)-ty*sin(tw/2);
-            double y = tx*sin(tw/2)+ty*cos((tw/2));
+            double x = tr * sin(alpha);
+            double y = tr * (1 - cos(alpha));
+            double px = (mRobW/2) * (1-cos(alpha));
+            double py = (mRobW/2) * -(sin(alpha));
             geometry_msgs::Point32 p;
-            p.x = x;
-            p.y = y;
+            p.x = x+px;
+            p.y = y+py;
             p.z = 0;
             bpoints.push_back(p);
-            beta += mRasterSize / tr;
+            alpha += mRasterSize / tr;
         }
 
 		// Add the PointCloud to the LUT
