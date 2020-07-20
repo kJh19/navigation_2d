@@ -81,7 +81,7 @@ void RobotOperator::initTrajTable()
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
 		double alpha = 0;
-		while(alpha <= PI)
+		while(alpha < PI)
 		{
 			double x = tr * sin(alpha);
 			double y = tr * (1 - cos(alpha));
@@ -95,7 +95,7 @@ void RobotOperator::initTrajTable()
 			alpha += mRasterSize / tr;
 		}
         alpha = 0;
-        while(alpha <= PI)
+        while(alpha < PI)
         {
             double x = tr * sin(alpha);
             double y = tr * (1 - cos(alpha));
@@ -154,16 +154,48 @@ void RobotOperator::initTrajTable()
 	
 	// Add First and Last LUT-element
 
-	geometry_msgs::Point32 p;
-	p.x = 0;
-	p.y = 0;
-	p.z = 0;
-	
-	sensor_msgs::PointCloud* turn = new sensor_msgs::PointCloud();
-	turn->header.stamp = ros::Time(0);
-	turn->header.frame_id = mRobotFrame;
-	turn->points.resize(1);
-	turn->points[0] = p;
+    std::vector<geometry_msgs::Point32> Points;
+    double tw = -PI*0.9;
+    double tx = cos(tw) + 1;
+    double ty = -sin(tw);
+    double tr = ((tx*tx)+(ty*ty))/(ty+ty);
+    double alpha = 0;
+    while(alpha <= PI)
+    {
+        double px = (mRobW/2) * -(1-cos(alpha));
+        double py = (mRobW/2) * (sin(alpha));
+        geometry_msgs::Point32 p;
+        p.x = px;
+        p.y = py;
+        p.z = 0;
+        Points.push_back(p);
+        alpha += mRasterSize / tr;
+    }
+
+    // Circle in left direction
+    sensor_msgs::PointCloud* tlcloud = new sensor_msgs::PointCloud();
+    tlcloud->header.stamp = ros::Time(0);
+    tlcloud->header.frame_id = mRobotFrame;
+    tlcloud->points.resize(Points.size());
+
+    // Circle in right direction
+    sensor_msgs::PointCloud* trcloud = new sensor_msgs::PointCloud();
+    trcloud->header.stamp = ros::Time(0);
+    trcloud->header.frame_id = mRobotFrame;
+    trcloud->points.resize(Points.size());
+
+    for(unsigned int j = 0; j < Points.size(); j++)
+    {
+        tlcloud->points[j] = Points[j];
+        trcloud->points[j] = Points[j];
+
+        trcloud->points[j].y *= -1;
+    }
+
+    mTrajTable[0] = tlcloud;
+    mTrajTable[LUT_RESOLUTION*2] = trcloud;
+    mTrajTable[LUT_RESOLUTION*2 + 1] = trcloud;
+    mTrajTable[LUT_RESOLUTION*4 + 1] = tlcloud;
 	
 	int straight_len = 5.0 / mRasterSize;
 	
@@ -176,7 +208,11 @@ void RobotOperator::initTrajTable()
 	bscloud->header.stamp = ros::Time(0);
 	bscloud->header.frame_id = mRobotFrame;
 	bscloud->points.resize(straight_len);
-	
+
+    geometry_msgs::Point32 p;
+    p.x = 0;
+    p.y = 0;
+    p.z = 0;
 	for(int i = 0; i < straight_len; i++)
 	{
 		fscloud->points[i] = p;
@@ -187,11 +223,6 @@ void RobotOperator::initTrajTable()
 	
 	mTrajTable[LUT_RESOLUTION] = fscloud;
 	mTrajTable[LUT_RESOLUTION*3 + 1] = bscloud;
-	
-	mTrajTable[0] = turn;
-	mTrajTable[LUT_RESOLUTION*2] = turn;
-	mTrajTable[LUT_RESOLUTION*2 + 1] = turn;
-	mTrajTable[LUT_RESOLUTION*4 + 1] = turn;
 
 	for(int i = 0; i < (LUT_RESOLUTION * 4) + 2; i++)
 	{
@@ -266,11 +297,11 @@ void RobotOperator::executeCommand()
 	// Determine maximum linear velocity
 	int freeCells = calculateFreeSpace(&transformedCloud);
 	double freeSpace = mRasterSize * freeCells;
-	if (mCurrentVelocity>0){
-	    freeSpace -= (mRobL-mRobW)/2;
+	if (mCurrentVelocity<0){
+        freeSpace -= mRobL;
 	}
     int danger = 1-calculateRotationSpace(&transformedCloud)/(255);
-    double safeVelocity = (freeSpace / mMaxFreeSpace)*(danger); // m/s
+    double safeVelocity = (freeSpace / mMaxFreeSpace)*(danger)+0.05; // m/s
 
     if(safeVelocity < 0)
         safeVelocity = 0.05;
@@ -286,7 +317,7 @@ void RobotOperator::executeCommand()
 
 	// Check whether the robot is stuck
 	if(mRecoverySteps > 0) mRecoverySteps--;
-	if(safeVelocity < 0.05)
+	if(safeVelocity < 0.1)
 	{
 		if(mDriveMode == 0)
 		{
@@ -366,7 +397,7 @@ void RobotOperator::executeCommand()
 		}
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = 0;
-	}else
+	} else
 	{
 		double x = sin(mCurrentDirection * PI);
 		double y = (cos(mCurrentDirection * PI) + 1);
@@ -391,7 +422,7 @@ void RobotOperator::executeCommand()
             controlMsg.angular.z = -mMaxTurn;
         }
 	}
-	ROS_WARN("%lf, %lf", mCurrentDirection, mCurrentVelocity);
+
 	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
     mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
