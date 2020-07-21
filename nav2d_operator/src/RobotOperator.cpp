@@ -74,12 +74,13 @@ void RobotOperator::initTrajTable()
 	}	
 	for(int i = 1; i < LUT_RESOLUTION; i++)
 	{
-		double tw = -PI * i / LUT_RESOLUTION;
+		double tw = -PI * i / (LUT_RESOLUTION);
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
 		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
+        ROS_WARN("%lf, %lf", tw, tr);
 		double alpha = 0;
 		while(alpha < PI)
 		{
@@ -88,8 +89,8 @@ void RobotOperator::initTrajTable()
             double px = (mRobW/2) * -(1-cos(alpha));
             double py = (mRobW/2) * (sin(alpha));
 			geometry_msgs::Point32 p;
-			p.x = x+px;
-			p.y = y+py;
+			p.x = x+px*sin(-tw/2);
+			p.y = y+py*sin(-tw/2);
 			p.z = 0;
 			fpoints.push_back(p);
 			alpha += mRasterSize / tr;
@@ -102,8 +103,8 @@ void RobotOperator::initTrajTable()
             double px = (mRobW/2) * (1-cos(alpha));
             double py = (mRobW/2) * -(sin(alpha));
             geometry_msgs::Point32 p;
-            p.x = x+px;
-            p.y = y+py;
+            p.x = x+px*sin(-tw/2);
+            p.y = y+py*sin(-tw/2);
             p.z = 0;
             bpoints.push_back(p);
             alpha += mRasterSize / tr;
@@ -155,7 +156,7 @@ void RobotOperator::initTrajTable()
 	// Add First and Last LUT-element
 
     std::vector<geometry_msgs::Point32> Points;
-    double tw = -PI*0.9;
+    double tw = -PI*0.99;
     double tx = cos(tw) + 1;
     double ty = -sin(tw);
     double tr = ((tx*tx)+(ty*ty))/(ty+ty);
@@ -239,14 +240,19 @@ void RobotOperator::receiveCommand(const nav2d_operator::cmd::ConstPtr& msg)
 	{
 		// The given direction is invalid.
 		// Something is going wrong, so better stop the robot:
-		mDesiredDirection = 0;
-		mDesiredVelocity = 0;
-		mCurrentDirection = 0;
-		mCurrentVelocity = 0;
+		//mDesiredDirection = 0;
+		//mDesiredVelocity = 0;
+		//mCurrentDirection = 0;
+		//mCurrentVelocity = 0;
 		ROS_ERROR("Invalid turn direction on topic '%s'!", COMMAND_TOPIC);
-		return;
-	}
-	mDesiredDirection = msg->Turn;
+		if (msg->Turn < -1) {
+            mDesiredDirection = -1;
+		} else if (msg->Turn > 1) {
+            mDesiredDirection = 1;
+		}
+	} else {
+        mDesiredDirection = msg->Turn;
+    }
 	mDesiredVelocity = msg->Velocity;
 	mDriveMode = msg->Mode;
 }
@@ -413,17 +419,27 @@ void RobotOperator::executeCommand()
 			ROS_DEBUG("Desired velocity of %.2f is limited to %.2f", velocity, -safeVelocity);
 			velocity = -safeVelocity;
 		}
-		
-		controlMsg.linear.x = velocity;
-		controlMsg.angular.z = -1.0 / r * controlMsg.linear.x;
-		if (controlMsg.angular.z > mMaxTurn) {
-            controlMsg.angular.z = mMaxTurn;
-		} else if (controlMsg.angular.z < -mMaxTurn) {
-            controlMsg.angular.z = -mMaxTurn;
-        }
-	}
 
-	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/mMaxVelocity};
+        double rotvelocity = -velocity/r;
+        if(rotvelocity > safeVelocity)
+        {
+            ROS_DEBUG("Desired rotvelocity of %.2f is limited to %.2f", rotvelocity, safeVelocity);
+            rotvelocity = safeVelocity;
+        }else if(rotvelocity < -safeVelocity)
+        {
+            ROS_DEBUG("Desired rotvelocity of %.2f is limited to %.2f", rotvelocity, -safeVelocity);
+            rotvelocity = -safeVelocity;
+        }
+        if (rotvelocity>mMaxTurn){
+            rotvelocity = mMaxTurn;
+        } else if (rotvelocity<-mMaxTurn){
+            rotvelocity=-mMaxTurn;
+        }
+		controlMsg.linear.x = velocity;
+		controlMsg.angular.z = rotvelocity;
+	}
+    //ROS_WARN("%lf,%lf", controlMsg.angular.z, controlMsg.linear.x);
+	joyMsg.axes = {controlMsg.angular.z, controlMsg.linear.x};
     mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
 }
