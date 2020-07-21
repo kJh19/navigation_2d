@@ -19,5 +19,5 @@ conformance_weight: 1
 continue_weight: 1
 
 # robot par
-robot_width: 0.4
-robot_length: 0.56
+robot_width: 0.45
+robot_length: 0.6
