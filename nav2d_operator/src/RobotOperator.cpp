@@ -13,7 +13,7 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 	
 	// Publish / subscribe to ROS topics
 	ros::NodeHandle robotNode;
-	robotNode.param("laser_frame", mRobotFrame, std::string("laser"));
+	robotNode.param("center_frame", mRobotFrame, std::string("center"));
 	robotNode.param("odometry_frame", mOdometryFrame, std::string("odometry_base"));
 	mCommandSubscriber = robotNode.subscribe(COMMAND_TOPIC, 1, &RobotOperator::receiveCommand, this);
 	mControlPublisher = robotNode.advertise<geometry_msgs::Twist>(CONTROL_TOPIC, 1);
@@ -37,11 +37,10 @@ RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 	operatorNode.param("escape_weight", mEscapeWeight, 1);
 	operatorNode.param("max_velocity", mMaxVelocity, 1.0);
     operatorNode.param("max_angular_velocity", mMaxTurn, 1.0);
-    operatorNode.param("robot_width", mRobW, 1.0);
-    operatorNode.param("robot_length", mRobL, 1.0);
+    operatorNode.param("offset", offset, 1.0);
 
 	// Apply tf_prefix to all used frame-id's
-	mRobotFrame = mTfListener.resolve("base_laser_link");
+	mRobotFrame = mTfListener.resolve("center");
 	mOdometryFrame = mTfListener.resolve(mOdometryFrame);
 
 	// Initialize the lookup table for the driving directions
@@ -84,12 +83,12 @@ void RobotOperator::initTrajTable()
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
 		double alpha = 0;
-		while(alpha < PI)
+		while(alpha <= PI)
 		{
 			double x = tr * sin(alpha);
 			double y = tr * (1 - cos(alpha));
-            double px = (mRobW/2) * -(1-cos(alpha));
-            double py = (mRobW/2) * (sin(alpha));
+            double px = (offset) * -(1-cos(alpha));
+            double py = (offset) * (sin(alpha));
 			geometry_msgs::Point32 p;
 			p.x = x+px*sin(-tw/2);
 			p.y = y+py*sin(-tw/2);
@@ -98,12 +97,12 @@ void RobotOperator::initTrajTable()
 			alpha += mRasterSize / (tr*cos(-tw/2)*cos(-tw/2)+ttr*sin(-tw/2)*sin(-tw/2));
 		}
         alpha = 0;
-        while(alpha < PI)
+        while(alpha <= PI)
         {
             double x = tr * sin(alpha);
             double y = tr * (1 - cos(alpha));
-            double px = (mRobW/2) * (1-cos(alpha));
-            double py = (mRobW/2) * -(sin(alpha));
+            double px = (offset) * (1-cos(alpha));
+            double py = (offset) * -(sin(alpha));
             geometry_msgs::Point32 p;
             p.x = x+px*sin(-tw/2);
             p.y = y+py*sin(-tw/2);
@@ -199,10 +198,10 @@ void RobotOperator::receiveCommand(const nav2d_operator::cmd::ConstPtr& msg)
 	{
 		// The given direction is invalid.
 		// Something is going wrong, so better stop the robot:
-		//mDesiredDirection = 0;
-		//mDesiredVelocity = 0;
-		//mCurrentDirection = 0;
-		//mCurrentVelocity = 0;
+		mDesiredDirection = 0;
+		mDesiredVelocity = 0;
+		mCurrentDirection = 0;
+		mCurrentVelocity = 0;
 		ROS_ERROR("Invalid turn direction on topic '%s'!", COMMAND_TOPIC);
 		if (msg->Turn < -1) {
             mDesiredDirection = -1;
@@ -262,12 +261,12 @@ void RobotOperator::executeCommand()
 	// Determine maximum linear velocity
 	int freeCells = calculateFreeSpace(&transformedCloud);
 	double freeSpace = mRasterSize * freeCells;
-	if (mCurrentVelocity<0){
-        freeSpace -= mRobL;
-	}
+
     double safety = 1-calculateRotationSpace(&transformedCloud)/(255.0);
     double MaxVelocity = mMaxVelocity*safety;
+
     double safeVelocity = (freeSpace / mMaxFreeSpace)+0.05; // m/s
+
     if(safeVelocity < 0)
         safeVelocity = 0.05;
 
@@ -394,11 +393,12 @@ void RobotOperator::executeCommand()
         } else if (rotvelocity<-mMaxTurn){
             rotvelocity=-mMaxTurn;
         }
+
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = rotvelocity;
 	}
     ROS_WARN("%lf,%lf,%lf", controlMsg.angular.z, controlMsg.linear.x, safeVelocity);
-	joyMsg.axes = {controlMsg.angular.z, controlMsg.linear.x};
+	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/MaxVelocity};
     mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
 }

@@ -18,6 +18,8 @@
 		<rosparam file="$(find nav2d_tutorials)/param/costmap.yaml" ns="local_map" />
 	</node>
 
+	<node pkg="tf" type="static_transform_publisher" name="link3_broadcaster" args="0.1625 0 0 0 0 0 1 base_link center 100" />
+
 	<!-- Start Mapper to genreate map from laser scans -->
 	<node name="Mapper" pkg="nav2d_karto" type="mapper">
 		<remap from="scan" to="base_scan"/>

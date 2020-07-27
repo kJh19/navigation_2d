@@ -130,8 +130,7 @@ private:
 	
 	double mMaxVelocity;
     double mMaxTurn;
-    double mRobW;
-    double mRobL;
+    double offset;
 	
 	bool mPublishRoute;
 	double mMaxFreeSpace;
