@@ -70,46 +70,36 @@ void RobotOperator::initTrajTable()
 	for(int i = 0; i < (LUT_RESOLUTION * 4) + 2; i++)
 	{
 		mTrajTable[i] = NULL;
-	}	
+	}
+
 	for(int i = 1; i <= LUT_RESOLUTION; i++)
 	{
 		double tw = -PI * i / (LUT_RESOLUTION);
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
 		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
-        double ttx = cos(tw*0.8) + 1;
-        double tty = -sin(tw*0.8);
-        double ttr = ((ttx*ttx)+(tty*tty))/(tty+tty);
 		std::vector<geometry_msgs::Point32> fpoints;
         std::vector<geometry_msgs::Point32> bpoints;
+        double curveAdjust = sin(-tw/2)*sin(-tw/2);
 		double alpha = 0;
 		while(alpha <= PI)
 		{
 			double x = tr * sin(alpha);
 			double y = tr * (1 - cos(alpha));
-            double px = (offset) * -(1-cos(alpha));
-            double py = (offset) * (sin(alpha));
+            double fx = (offset) * -(1-cos(alpha));
+            double fy = (offset) * (sin(alpha));
+            double bx = (offset) * (1-cos(alpha));
+            double by = (offset) * -(sin(alpha));
 			geometry_msgs::Point32 p;
-			p.x = x+px*sin(-tw/2);
-			p.y = y+py*sin(-tw/2);
+			p.x = x+fx*curveAdjust;
+			p.y = y+fy*curveAdjust;
 			p.z = 0;
 			fpoints.push_back(p);
-			alpha += mRasterSize / (tr*cos(-tw/2)*cos(-tw/2)+ttr*sin(-tw/2)*sin(-tw/2));
-		}
-        alpha = 0;
-        while(alpha <= PI)
-        {
-            double x = tr * sin(alpha);
-            double y = tr * (1 - cos(alpha));
-            double px = (offset) * (1-cos(alpha));
-            double py = (offset) * -(sin(alpha));
-            geometry_msgs::Point32 p;
-            p.x = x+px*sin(-tw/2);
-            p.y = y+py*sin(-tw/2);
-            p.z = 0;
+            p.x = x+bx*curveAdjust;
+            p.y = y+by*curveAdjust;
             bpoints.push_back(p);
-            alpha += mRasterSize / (tr*cos(-tw/2)*cos(-tw/2)+ttr*sin(-tw/2)*sin(-tw/2));
-        }
+			alpha += mRasterSize / (tr + offset*curveAdjust);
+		}
 
 		// Add the PointCloud to the LUT
 		// Circle in forward-left direction
@@ -262,7 +252,8 @@ void RobotOperator::executeCommand()
 	int freeCells = calculateFreeSpace(&transformedCloud);
 	double freeSpace = mRasterSize * freeCells;
 
-    double safety = 1-calculateRotationSpace(&transformedCloud)/(255.0);
+	int rotspace = calculateRotationSpace(&transformedCloud);
+    double safety = (rotspace > 255*0.8) ? 0.2 : 1-rotspace/(255.0);
     double MaxVelocity = mMaxVelocity*safety;
 
     double safeVelocity = (freeSpace / mMaxFreeSpace)+0.05; // m/s
@@ -366,6 +357,7 @@ void RobotOperator::executeCommand()
 		double x = sin(mCurrentDirection * PI);
 		double y = (cos(mCurrentDirection * PI) + 1);
 		double r = ((x*x) + (y*y)) / (2*x);
+        ROS_WARN("%lf", r);
 		double abs_r = (r > 0) ? r : -r;
 		velocity /= (1 + (1.0/abs_r));
 		if(velocity > safeVelocity)
@@ -397,7 +389,7 @@ void RobotOperator::executeCommand()
 		controlMsg.linear.x = velocity;
 		controlMsg.angular.z = rotvelocity;
 	}
-    ROS_WARN("%lf,%lf,%lf", controlMsg.angular.z, controlMsg.linear.x, safeVelocity);
+    //ROS_WARN("%lf,%lf,%lf", controlMsg.angular.z, controlMsg.linear.x, safeVelocity);
 	joyMsg.axes = {controlMsg.angular.z/mMaxTurn, controlMsg.linear.x/MaxVelocity};
     mjoyPublisher.publish(joyMsg);
 	mControlPublisher.publish(controlMsg);
