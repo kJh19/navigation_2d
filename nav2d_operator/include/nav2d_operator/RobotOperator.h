@@ -12,6 +12,9 @@
 #include <costmap_2d/costmap_2d_ros.h>
 #include <sensor_msgs/PointCloud.h>
 #include <nav2d_operator/cmd.h>
+#include <tf/transform_listener.h>
+#include <tf2_ros/transform_listener.h>
+#include <sensor_msgs/Joy.h>
 
 #include <string>
 
@@ -59,6 +62,13 @@ private:
 	 */
 	int calculateFreeSpace(sensor_msgs::PointCloud* cloud);
 
+    /**
+     * @brief Calculates the distance the robot can rotate
+     * @param cloud PointCloud defining a trajectory
+     * @return Likelihood to hit something
+     */
+    int calculateRotationSpace(sensor_msgs::PointCloud* cloud);
+
 	/**
 	 * @brief Calculate the action value of a given command
 	 * @param direction How to move the robot
@@ -100,12 +110,16 @@ private:
 	double mRasterSize;
 	
 	tf::TransformListener mTfListener;
+	tf2_ros::Buffer mTf2Buffer;
+	tf2_ros::TransformListener mTf2Listener;
 	
 	ros::Subscriber mCommandSubscriber;
 	ros::Publisher mControlPublisher;
+	ros::Publisher mSafetyPublisher;
 	ros::Publisher mTrajectoryPublisher;
 	ros::Publisher mPlanPublisher;
 	ros::Publisher mCostPublisher;
+    ros::Publisher mjoyPublisher;
 	
 	double mDesiredVelocity;
 	double mDesiredDirection;
@@ -116,14 +130,19 @@ private:
 	sensor_msgs::PointCloud* mTrajTable[(LUT_RESOLUTION * 4) + 2];
 	
 	double mMaxVelocity;
+    double mMaxRevVelocity;
+    double mMaxTurn;
+    double offset;
+    double robW;
+    double robL;
 	
 	bool mPublishRoute;
 	double mMaxFreeSpace;
 	double mSafetyDecay;
-	int mDistanceWeight;
 	int mSafetyWeight;
 	int mConformanceWeight;
 	int mContinueWeight;
+	int mEscapeWeight;
 
 	std::string mOdometryFrame;
 	std::string mRobotFrame;

@@ -5,7 +5,7 @@
 
 #define PI 3.14159265
 
-RobotOperator::RobotOperator()
+RobotOperator::RobotOperator() : mTf2Buffer(), mTf2Listener(mTf2Buffer)
 {
 	// Create the local costmap
 	mLocalMap = new costmap_2d::Costmap2DROS("local_map", mTfListener);
@@ -13,10 +13,12 @@ RobotOperator::RobotOperator()
 	
 	// Publish / subscribe to ROS topics
 	ros::NodeHandle robotNode;
-	robotNode.param("robot_frame", mRobotFrame, std::string("robot"));
+	robotNode.param("center_frame", mRobotFrame, std::string("center"));
 	robotNode.param("odometry_frame", mOdometryFrame, std::string("odometry_base"));
 	mCommandSubscriber = robotNode.subscribe(COMMAND_TOPIC, 1, &RobotOperator::receiveCommand, this);
-	mControlPublisher = robotNode.advertise<geometry_msgs::Twist>(CONTROL_TOPIC, 1);
+	//mControlPublisher = robotNode.advertise<geometry_msgs::Twist>(CONTROL_TOPIC, 1);
+	mSafetyPublisher = robotNode.advertise<geometry_msgs::Twist>("/safetydata", 1);
+	mjoyPublisher = robotNode.advertise<geometry_msgs::Twist>("/whill/controller/cmd_vel", 1);
 	mCostPublisher = robotNode.advertise<geometry_msgs::Vector3>("costs", 1);
 	
 	// Get parameters from the parameter server
@@ -30,14 +32,19 @@ RobotOperator::RobotOperator()
 	}
 	operatorNode.param("max_free_space", mMaxFreeSpace, 5.0);
 	operatorNode.param("safety_decay", mSafetyDecay, 0.95);
-	operatorNode.param("distance_weight", mDistanceWeight, 1);
 	operatorNode.param("safety_weight", mSafetyWeight, 1);
 	operatorNode.param("conformance_weight", mConformanceWeight, 1);
 	operatorNode.param("continue_weight", mContinueWeight, 1);
+	operatorNode.param("escape_weight", mEscapeWeight, 1);
 	operatorNode.param("max_velocity", mMaxVelocity, 1.0);
+	operatorNode.param("max_revvelocity", mMaxRevVelocity, 1.0);
+	operatorNode.param("max_angular_velocity", mMaxTurn, 1.0);
+	operatorNode.param("offset", offset, 1.0);
+	operatorNode.param("robotwidth", robW, 1.0);
+	operatorNode.param("robotlength", robL, 1.0);
 
 	// Apply tf_prefix to all used frame-id's
-	mRobotFrame = mTfListener.resolve(mRobotFrame);
+	mRobotFrame = mTfListener.resolve("center");
 	mOdometryFrame = mTfListener.resolve(mOdometryFrame);
 
 	// Initialize the lookup table for the driving directions
@@ -67,58 +74,69 @@ void RobotOperator::initTrajTable()
 	for(int i = 0; i < (LUT_RESOLUTION * 4) + 2; i++)
 	{
 		mTrajTable[i] = NULL;
-	}	
-	for(int i = 1; i < LUT_RESOLUTION; i++)
+	}
+
+	for(int i = 1; i <= LUT_RESOLUTION; i++)
 	{
-		double tw = -PI * i / LUT_RESOLUTION;
+		double tw = -PI * i / (LUT_RESOLUTION);
 		double tx = cos(tw) + 1;
 		double ty = -sin(tw);
 		double tr = ((tx*tx)+(ty*ty))/(ty+ty);
-		std::vector<geometry_msgs::Point32> points;
+		std::vector<geometry_msgs::Point32> fpoints;
+		std::vector<geometry_msgs::Point32> bpoints;
+		double curveAdjust = -tw/PI;
 		double alpha = 0;
-		while(alpha < PI)
+		while(alpha <= PI)
 		{
 			double x = tr * sin(alpha);
-			double y = tr * (1.0 - cos(alpha));
+			double y = tr * (1 - cos(alpha));
+			double fx = (offset) * -(1-cos(alpha));
+			double fy = (offset) * (sin(alpha));
+			double bx = -fx;
+			double by = -fy;
 			geometry_msgs::Point32 p;
-			p.x = x;
-			p.y = y;
+			p.x = x+fx*curveAdjust;
+			p.y = y+fy*curveAdjust;
 			p.z = 0;
-			points.push_back(p);
-			alpha += mRasterSize / tr;
+			fpoints.push_back(p);
+			p.x = x+bx*curveAdjust;
+			p.y = y+by*curveAdjust;
+			bpoints.push_back(p);
+			alpha += mRasterSize / (tr + offset*curveAdjust);
 		}
+
 		// Add the PointCloud to the LUT
 		// Circle in forward-left direction
 		sensor_msgs::PointCloud* flcloud = new sensor_msgs::PointCloud();
 		flcloud->header.stamp = ros::Time(0);
 		flcloud->header.frame_id = mRobotFrame;
-		flcloud->points.resize(points.size());
+		flcloud->points.resize(fpoints.size());
 		
 		// Circle in forward-right direction
 		sensor_msgs::PointCloud* frcloud = new sensor_msgs::PointCloud();
 		frcloud->header.stamp = ros::Time(0);
 		frcloud->header.frame_id = mRobotFrame;
-		frcloud->points.resize(points.size());
-		
+		frcloud->points.resize(fpoints.size());
+			
 		// Circle in backward-left direction
 		sensor_msgs::PointCloud* blcloud = new sensor_msgs::PointCloud();
 		blcloud->header.stamp = ros::Time(0);
 		blcloud->header.frame_id = mRobotFrame;
-		blcloud->points.resize(points.size());
-		
+		blcloud->points.resize(bpoints.size());
+			
 		// Circle in backward-right direction
 		sensor_msgs::PointCloud* brcloud = new sensor_msgs::PointCloud();
 		brcloud->header.stamp = ros::Time(0);
 		brcloud->header.frame_id = mRobotFrame;
-		brcloud->points.resize(points.size());
-		
-		for(unsigned int j = 0; j < points.size(); j++)
-		{
-			flcloud->points[j] = points[j];
-			frcloud->points[j] = points[j];
-			blcloud->points[j] = points[j];
-			brcloud->points[j] = points[j];
+		brcloud->points.resize(bpoints.size());
 			
+		for(unsigned int j = 0; j < fpoints.size(); j++)
+		{
+			flcloud->points[j] = fpoints[j];
+			frcloud->points[j] = fpoints[j];
+			blcloud->points[j] = bpoints[j];
+			brcloud->points[j] = bpoints[j];
+				
 			frcloud->points[j].y *= -1;
 			blcloud->points[j].x *= -1;
 			brcloud->points[j].x *= -1;
@@ -129,19 +147,9 @@ void RobotOperator::initTrajTable()
 		mTrajTable[(3 * LUT_RESOLUTION + 1) - i] = blcloud;
 		mTrajTable[(3 * LUT_RESOLUTION + 1) + i] = brcloud;
 	}
-	
+
 	// Add First and Last LUT-element
-	geometry_msgs::Point32 p;
-	p.x = 0;
-	p.y = 0;
-	p.z = 0;
-	
-	sensor_msgs::PointCloud* turn = new sensor_msgs::PointCloud();
-	turn->header.stamp = ros::Time(0);
-	turn->header.frame_id = mRobotFrame;
-	turn->points.resize(1);
-	turn->points[0] = p;
-	
+
 	int straight_len = 5.0 / mRasterSize;
 	
 	sensor_msgs::PointCloud* fscloud = new sensor_msgs::PointCloud();
@@ -153,7 +161,11 @@ void RobotOperator::initTrajTable()
 	bscloud->header.stamp = ros::Time(0);
 	bscloud->header.frame_id = mRobotFrame;
 	bscloud->points.resize(straight_len);
-	
+
+	geometry_msgs::Point32 p;
+	p.x = 0;
+	p.y = 0;
+	p.z = 0;
 	for(int i = 0; i < straight_len; i++)
 	{
 		fscloud->points[i] = p;
@@ -164,12 +176,7 @@ void RobotOperator::initTrajTable()
 	
 	mTrajTable[LUT_RESOLUTION] = fscloud;
 	mTrajTable[LUT_RESOLUTION*3 + 1] = bscloud;
-	
-	mTrajTable[0] = turn;
-	mTrajTable[LUT_RESOLUTION*2] = turn;
-	mTrajTable[LUT_RESOLUTION*2 + 1] = turn;
-	mTrajTable[LUT_RESOLUTION*4 + 1] = turn;
-	
+
 	for(int i = 0; i < (LUT_RESOLUTION * 4) + 2; i++)
 	{
 		if(!mTrajTable[i])
@@ -181,29 +188,36 @@ void RobotOperator::initTrajTable()
 
 void RobotOperator::receiveCommand(const nav2d_operator::cmd::ConstPtr& msg)
 {
-	if(msg->Turn < -1 || msg->Turn > 1)
-	{
-		// The given direction is invalid.
-		// Something is going wrong, so better stop the robot:
-		mDesiredDirection = 0;
-		mDesiredVelocity = 0;
-		mCurrentDirection = 0;
-		mCurrentVelocity = 0;
-		ROS_ERROR("Invalid turn direction on topic '%s'!", COMMAND_TOPIC);
-		return;
-	}
-	mDesiredDirection = msg->Turn;
-	mDesiredVelocity = msg->Velocity * mMaxVelocity;
+	float turnlimit = 1.0;//0.8;
+    if (msg->Mode != 2 && msg->Mode != 5) {
+        if (msg->Turn < -turnlimit || msg->Turn > turnlimit) {
+            // The given direction is invalid
+            ROS_ERROR("Invalid turn direction on topic '%s'!", COMMAND_TOPIC);
+            if (msg->Turn < -turnlimit) {
+                mDesiredDirection = -turnlimit;
+            } else if (msg->Turn > turnlimit) {
+                mDesiredDirection = turnlimit;
+            }
+        } else {
+            mDesiredDirection = msg->Turn;
+        }
+    }
+    if (msg->Mode!=3 && msg->Mode != 6) {
+        mDesiredVelocity = msg->Velocity;
+    }
+    if (msg->Mode != 99){
 	mDriveMode = msg->Mode;
+    }
 }
 
 void RobotOperator::executeCommand()
 {
 	// 1. Get a copy of the costmap to work on.
 	mCostmap = mLocalMap->getCostmap();
-    boost::unique_lock<costmap_2d::Costmap2D::mutex_t> lock(*(mCostmap->getMutex()));
+	boost::unique_lock<costmap_2d::Costmap2D::mutex_t> lock(*(mCostmap->getMutex()));
 	double bestDirection, d;
-	
+	float joylin;
+    float joyang;
 	// 2. Set velocity and direction depending on drive mode
 	switch(mDriveMode)
 	{
@@ -216,10 +230,33 @@ void RobotOperator::executeCommand()
 		mCurrentVelocity = mDesiredVelocity;
 		break;
 	case 1:
+	case 2:
+	case 3:
 		mCurrentDirection = mDesiredDirection;
 		mCurrentVelocity = mDesiredVelocity;
 		break;
-	default:
+	case 4:
+	case 5:
+	case 6:
+	//angular + linear to undifferentiated vel with an direction
+		if (mDesiredVelocity < 0){
+			joylin = mDesiredVelocity*mMaxVelocity;
+		} else {
+			joylin = mDesiredVelocity*mMaxRevVelocity;
+		}
+        joyang = mDesiredDirection*mMaxTurn;
+		if (mDesiredVelocity==0 && mDesiredDirection==0){
+		    mCurrentVelocity = 0;
+		    mCurrentDirection = 0;
+		} else if (mDesiredVelocity==0) {
+		    mCurrentVelocity = abs(joyang);
+		    mCurrentDirection = abs(joyang)/joyang;
+		} else {
+		    mCurrentVelocity = (abs(joylin)+abs(joyang))*abs(joylin)/joylin;
+		    mCurrentDirection = atan(joyang/joylin) * (2 / PI);
+		}
+        break;
+        default:
 		ROS_ERROR("Invalid drive mode!");
 		mCurrentVelocity = 0.0;
 	}
@@ -227,7 +264,7 @@ void RobotOperator::executeCommand()
 	// Create some Debug-Info
 	evaluateAction(mCurrentDirection, mCurrentVelocity, true);
 	
-	sensor_msgs::PointCloud* originalCloud = getPointCloud(mCurrentDirection, mDesiredVelocity);
+	sensor_msgs::PointCloud* originalCloud = getPointCloud(mCurrentDirection, mCurrentVelocity);
 	sensor_msgs::PointCloud transformedCloud;
 
 	try
@@ -241,22 +278,56 @@ void RobotOperator::executeCommand()
 	}
 	
 	// Determine maximum linear velocity
-	int freeCells = calculateFreeSpace(&transformedCloud);
-	double freeSpace = mRasterSize * freeCells;
+    geometry_msgs::Twist safetyMsg;
+    float minimumsafevelocity = 0.1;
+    
+    //based on space on trajectory
+    int freeCells = calculateFreeSpace(&transformedCloud);
+    double freeSpace = mRasterSize * freeCells;
+    double safeVelocity = (freeSpace-0.2 / mMaxFreeSpace);
 
-	double safeVelocity = (freeSpace / mMaxFreeSpace) + 0.05;
-	if(freeCells == transformedCloud.points.size() && safeVelocity < 0.5)
-		safeVelocity = 0.5;
-		
-	if(freeSpace < 0.3 && freeCells < transformedCloud.points.size())
-		safeVelocity = 0;
+    if (safeVelocity < 0) {
+        safeVelocity = 0.;
+    }
 
-	if(safeVelocity > mMaxVelocity)
-		safeVelocity = mMaxVelocity;
-
+    //For when moving blindly
+    //if (freeSpace < 0.65 && freeCells < transformedCloud.points.size()) {
+    //    safeVelocity = freeSpace/10;
+    //} else
+    //if(mCurrentVelocity < 0) { //For when moving backwards
+	//	safeVelocity /= 2;
+    //}
+	
+    //Last break
+    if (freeSpace < 0.3 && freeCells < transformedCloud.points.size()) {
+        safeVelocity = minimumsafevelocity;
+    }
+    
+    //publish debug info
+    safetyMsg.linear.x = freeSpace;
+    safetyMsg.linear.y = safeVelocity;
+    safetyMsg.linear.z = 0;
+    
+    //based on closest object distance
+    int rotspace = calculateRotationSpace(&transformedCloud);
+    double safety = (rotspace > 255*1.0) ? 0.0 : 1.0-(rotspace/(255.0*1.0));
+    if (safety != 1.0 && safeVelocity > safety) {
+       safeVelocity = safety;
+    }
+    
+    if (safeVelocity < minimumsafevelocity) {
+        safeVelocity = minimumsafevelocity;
+    }
+	
+    //publish debug info
+    safetyMsg.angular.x = (1-rotspace/255.0)*robW;
+    safetyMsg.angular.y = safety;
+    safetyMsg.angular.z = 0;
+    mSafetyPublisher.publish(safetyMsg);
+	safeVelocity = 10;
 	// Check whether the robot is stuck
 	if(mRecoverySteps > 0) mRecoverySteps--;
-	if(safeVelocity < 0.1)
+	if(safeVelocity < 0.01)
 	{
 		if(mDriveMode == 0)
 		{
@@ -264,7 +335,7 @@ void RobotOperator::executeCommand()
 			ROS_WARN_THROTTLE(1, "Robot is stuck! Trying to recover...");
 		}else
 		{
-			mCurrentVelocity = 0;
+			//mCurrentVelocity = 0.05;
 			ROS_WARN_THROTTLE(1, "Robot cannot move further in this direction!");
 		}
 	}
@@ -289,7 +360,7 @@ void RobotOperator::executeCommand()
 		mTrajectoryPublisher.publish(route_msg);
 	
 		// Publish plan via ROS (mainly for debugging)
-		sensor_msgs::PointCloud* originalPlanCloud = getPointCloud(mDesiredDirection, mDesiredVelocity);
+		sensor_msgs::PointCloud* originalPlanCloud = getPointCloud(mCurrentDirection, mCurrentVelocity);
 		sensor_msgs::PointCloud transformedPlanCloud;
 
 		try
@@ -319,46 +390,59 @@ void RobotOperator::executeCommand()
 	}
 	
 	// Publish result via Twist-Message
-	geometry_msgs::Twist controlMsg;
-	double velocity = mCurrentVelocity;
-	if(mCurrentDirection == 0)
-	{
-		if(velocity > safeVelocity)
-		{
-			ROS_DEBUG("Desired velocity of %.2f is limited to %.2f", velocity, safeVelocity);
-			velocity = safeVelocity;
-		}else if(velocity < -safeVelocity)
-		{
-			ROS_DEBUG("Desired velocity of %.2f is limited to %.2f", velocity, -safeVelocity);
-			velocity = -safeVelocity;
-		}
-		controlMsg.linear.x = velocity;
-		controlMsg.angular.z = 0;
-	}else if(mCurrentDirection == -1 || mCurrentDirection == 1)
-	{
-		controlMsg.linear.x = 0;
-		controlMsg.angular.z = -1.0 * mCurrentDirection * velocity;
-	}else
-	{
-		double x = sin(mCurrentDirection * PI);
-		double y = (cos(mCurrentDirection * PI) + 1);
-		double r = ((x*x) + (y*y)) / (2*x);
-		double abs_r = (r > 0) ? r : -r;
-		velocity /= (1 + (1.0/abs_r));
-		if(velocity > safeVelocity)
-		{
-			ROS_DEBUG("Desired velocity of %.2f is limited to %.2f", velocity, safeVelocity);
-			velocity = safeVelocity;
-		}else if(velocity < -safeVelocity)
-		{
-			ROS_DEBUG("Desired velocity of %.2f is limited to %.2f", velocity, -safeVelocity);
-			velocity = -safeVelocity;
-		}
-		
-		controlMsg.linear.x = velocity;
-		controlMsg.angular.z = -1.0 / r * controlMsg.linear.x;
+    sensor_msgs::Joy joyMsg;
+    geometry_msgs::Twist twistMsg;
+    double preLinear;
+    double preAngular;
+    double normLinear;
+    double normAngular;
+    double velocity = mCurrentVelocity;
+    if (mCurrentDirection == 0) {
+	if (velocity > safeVelocity) {
+	    velocity = safeVelocity;
+	} else if (velocity < -safeVelocity) {
+	    velocity = -safeVelocity;
 	}
-	mControlPublisher.publish(controlMsg);
+	preLinear = velocity;
+	preAngular = 0.0;
+    } else {
+        double x = -sin(mCurrentDirection * PI);
+        double y = (cos(mCurrentDirection * PI) + 1.0);
+        double r = ((x*x) + (y*y)) / (2.0*x);
+        double abs_r = (r > 0.0) ? r : -r;
+        //ROS_WARN("%lf", r);
+        double linvelocity = velocity/(1.0 + (1.0/(abs_r)));
+        double angvelocity = linvelocity/r; //Rad/s
+        double rotvelocity = angvelocity*offset;
+        double vel = sqrt(velocity*velocity+rotvelocity*rotvelocity);
+        double vper = vel/safeVelocity;
+        if (vper > 1.0) {
+            rotvelocity /= vper;
+            angvelocity /= vper;
+            linvelocity /= vper;
+        }
+        preLinear = linvelocity;
+        preAngular = angvelocity;
+   }
+
+    normAngular = preAngular/mMaxTurn;
+    if (preLinear > 0.0) {
+        normLinear = preLinear/mMaxVelocity;
+    } else {
+        normLinear = preLinear / mMaxRevVelocity;
+    }
+
+    double vector = sqrt(normAngular*normAngular+normLinear*normLinear);
+    if (vector >1.0){
+        normAngular /= vector;
+        normLinear /= vector;
+    }
+
+	//joyMsg.axes = {0, 0};
+    joyMsg.axes = {normAngular, normLinear};
+    twistMsg.linear.x = normLinear;
+    twistMsg.angular.z = normAngular;
+    mjoyPublisher.publish(twistMsg);
 }
 
 int RobotOperator::calculateFreeSpace(sensor_msgs::PointCloud* cloud)
@@ -385,6 +469,17 @@ int RobotOperator::calculateFreeSpace(sensor_msgs::PointCloud* cloud)
 	return freeSpace;
 }
 
+int RobotOperator::calculateRotationSpace(sensor_msgs::PointCloud* cloud)
+{
+    unsigned int mx, my;
+    if(mCostmap->worldToMap(cloud->points[0].x, cloud->points[0].y, mx, my))
+    {
+        return mCostmap->getCost(mx,my);
+    }
+
+    return 1;
+}
+
 double RobotOperator::evaluateAction(double direction, double velocity, bool debug)
 {
 	sensor_msgs::PointCloud* originalCloud = getPointCloud(direction, velocity);
@@ -399,83 +494,78 @@ double RobotOperator::evaluateAction(double direction, double velocity, bool deb
 		return 1;
 	}
 	
-	double valueDistance = 0.0;    // How far can the robot move in this direction?
 	double valueSafety = 0.0;      // How safe is it to move in that direction?
+	double valueEscape = 0.0;      // How much does the safety improve?
 	double valueConformance = 0.0; // How conform is it with the desired direction?
+	double valueContinue = 0.0;    // How conform is it with the previous command?
 	
-	double freeSpace = 0.0;
 	double decay = 1.0;
-	unsigned char cell_cost;
-	double safety;
+	double safe_max = 0.0;
+	double cost_max = 0.0;
+	double cost_start = 1.0;
 	
-	// Calculate safety value
+	// Calculate safety and escape value
 	int length = transformedCloud.points.size();
-	bool gettingBetter = true;
 	for(int i = 0; i < length; i++)
 	{
 		unsigned int mx, my;
+		double cell_cost;
 		if(mCostmap->worldToMap(transformedCloud.points[i].x, transformedCloud.points[i].y, mx, my))
 		{
-			cell_cost = mCostmap->getCost(mx,my);
-			if(cell_cost >= costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
+			cell_cost = (double)mCostmap->getCost(mx,my) / costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
+			if(cell_cost >= 1.0)
 			{
 				// Trajectory hit an obstacle
 				break;
 			}
 		}
-		freeSpace += mRasterSize;
-			
-		safety = costmap_2d::INSCRIBED_INFLATED_OBSTACLE - (cell_cost * decay);
-		if(gettingBetter)
-		{
-			if(safety >= valueSafety) valueSafety = safety;
-			else gettingBetter = false;
-		}else
-		{
-			if(safety < valueSafety) valueSafety = safety;
-		}
+		if(i == 0)
+			cost_start = cell_cost;
+		double cost = cell_cost * decay;
+		double safe = (cost_start - cell_cost) * decay * 2.0;
+		
+		if(cost > cost_max) cost_max = cost;
+		if(safe > safe_max) safe_max = safe;
+		
 		decay *= mSafetyDecay;
 	}
 	
 	double action_value = 0.0;
 	double normFactor = 0.0;
-	valueSafety /= costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
 	
-	// Calculate distance value
-	if(freeSpace >= mMaxFreeSpace)
-	{
-		freeSpace = mMaxFreeSpace;
-	}
-	valueDistance = freeSpace / std::min(mMaxFreeSpace, length*mRasterSize);
-	normFactor = mDistanceWeight + mSafetyWeight;
+	// Add safety value
+	valueSafety = 1.0 - cost_max;
+	action_value += valueSafety * mSafetyWeight;
+	normFactor += mSafetyWeight;
+	
+	// Add escape value
+	valueEscape = safe_max;
+	action_value += valueEscape * mEscapeWeight;
+	normFactor += mEscapeWeight;
 
 	if(mRecoverySteps == 0)
 	{
 		// Calculate continuety value
-		double valueContinue = mCurrentDirection - direction;
-		if(valueContinue < 0) valueContinue *= -1;
-		valueContinue = 1.0 / (1.0 + exp(pow(valueContinue-0.5,15)));
+		valueContinue = (mCurrentDirection - direction) * 0.5;
+		valueContinue = 1.0 - (valueContinue * valueContinue);
 		
 		// Calculate conformance value
-		double desired_sq = (mDesiredDirection > 0) ? mDesiredDirection * mDesiredDirection : mDesiredDirection * -mDesiredDirection;
-		double evaluated_sq = (direction > 0) ? direction * direction : direction * -direction;
-		valueConformance = cos(PI / 2.0 * (desired_sq - evaluated_sq)); // cos(-PI/2 ... +PI/2) --> [0 .. 1 .. 0]
+		double corr = (mCurrentDirection - direction) * PI;
+		valueConformance = 0.5 * cos(corr) + 0.5;
 		
+		// Add both to action value
 		action_value += valueConformance * mConformanceWeight;
 		action_value += valueContinue * mContinueWeight;
 		normFactor += mConformanceWeight + mContinueWeight;
 	}
 	
-	action_value += valueDistance * mDistanceWeight;
-	action_value += valueSafety * mSafetyWeight;
-	action_value /=  normFactor;
+	action_value /= normFactor;
 	
 	if(debug)
 	{
 		geometry_msgs::Vector3 cost_msg;
-		cost_msg.x = valueDistance;
-		cost_msg.y = valueSafety;
-//		cost_msg.y = valueContinue;
+		cost_msg.x = valueSafety;
+		cost_msg.y = valueEscape;
 		cost_msg.z = valueConformance;
 		mCostPublisher.publish(cost_msg); 
 	}
@@ -500,7 +590,7 @@ double RobotOperator::findBestDirection()
 	
 	while(dir <= 1.0)
 	{
-		double value = evaluateAction(dir, mDesiredVelocity);
+		double value = evaluateAction(dir, mCurrentVelocity);
 		if(value > best_value)
 		{
 			best_dir = dir;
